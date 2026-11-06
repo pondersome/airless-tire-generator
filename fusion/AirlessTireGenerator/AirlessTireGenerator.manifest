@@ -1,0 +1,13 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"addin",
+	"id":	"5ab69ea8-d574-432b-8a39-e49cf2b644a5",
+	"author":	"Ponderbotics",
+	"description":	{
+		"":	"Airless Tire Generator: parametric airless (structured) tires for 3D printing. Gothic arch, curved spoke and honeycomb structures, optional open tread, and hub anchors with a matching hub cutter. Adds a button to SOLID > CREATE. https://github.com/pondersome/airless-tire-generator"
+	},
+	"version":	"1.11",
+	"runOnStartup":	true,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true
+}
