@@ -46,6 +46,32 @@ CASES = [
     ('T-slot head not wider', {'a_t_n': 2, 'a_t_head_w': 2}, 'error', 'wider than the neck'),
     ('Dovetails crowd at tips', {'a_dt_n': 20, 'a_dt_d': 8}, 'warn', 'tips'),
     ('Anchors overlap each other', {'a_peg_n': 12, 'a_t_n': 12}, 'warn', 'overlap'),
+    # tread profiles
+    ('Crowned defaults', {'profile': 'crowned'}, 'ok', None),
+    ('Crowned flat crown, rolled edges', {'profile': 'crowned', 'pc_crown_r': 0, 'pc_shoulder_r': 6}, 'ok', None),
+    ('Crown radius under half the crown', {'profile': 'crowned', 'pc_crown_r': 5}, 'error',
+     'more than half the crown width'),
+    ('Shoulders turn vertical early', {'profile': 'crowned', 'pc_shoulder_r': 3}, 'error',
+     'Shoulder radius must be more than'),
+    ('Crown wider than the tire', {'profile': 'crowned', 'pc_crown_w': 25}, 'error', 'more than the tire width'),
+    ('Steep shoulders', {'profile': 'crowned', 'pc_shoulder_r': 5}, 'warn', 'from vertical'),
+    ('Squeeze opens a sliver at the faces', {'pattern': 'gothic', 'g_count': 14, 'profile': 'crowned',
+                                             'pc_crown_w': 0, 'pc_crown_r': 0, 'pc_shoulder_r': 20},
+     'warn', '(at the faces)'),
+    ('Crown too deep for the zone', {'profile': 'crowned', 'tire_od': 80, 'pc_crown_w': 0, 'pc_crown_r': 0,
+                                     'pc_shoulder_r': 11}, 'error', 'needs at least 2 mm'),
+    ('Grooved defaults: lands gap', {'profile': 'grooved'}, 'warn', 'Warning (at the lands)'),
+    ('Grooved defaults, bulge 0.12', {'profile': 'grooved', 'g_bulge': 0.12}, 'ok', None),
+    ('Groove wider than the tire', {'profile': 'grooved', 'pg_contact_w': 30}, 'error', 'more than the tire width'),
+    ('Groove as wide as the ball', {'profile': 'grooved', 'pg_ball_d': 15}, 'error', 'less than the ball diameter'),
+    ('Groove bottom leaves no spoke zone', {'profile': 'grooved', 'tire_od': 70}, 'error', 'Spoke zone is only'),
+    ('Honeycomb collapses at groove bottom', {'pattern': 'honey', 'h_count': 14, 'h_rows': 2, 'h_lines': 1,
+                                              'profile': 'grooved', 'pg_ball_d': 30, 'pg_contact_w': 20},
+     'error', 'At the groove bottom'),
+    ('Grooved open honeycomb, flat cells', {'pattern': 'honey', 'tire_od': 88, 'bore_d': 64, 'width': 40,
+                                            'h_count': 40, 'h_rows': 2, 'h_lines': 1, 'outer_lines': 0,
+                                            'keep_open': True, 'profile': 'grooved', 'pg_contact_w': 30},
+     'warn', 'Warning (at the groove bottom)'),
 ]
 
 
@@ -71,16 +97,42 @@ def main():
         failed += 0 if good else 1
         print('%s  %-40s expected %-5s got %-5s %s'
               % ('PASS' if good else 'FAIL', desc, expected, got, (' | '.join(msgs))[:110]))
-    # settings migration from earlier versions
+    crown = mod.CrownProfile(30, 18, 80, 12)
+    groove = mod.GrooveProfile(40, 127, 30)
+    crowned = settings(mod, {'profile': 'crowned'})
+    grooved = settings(mod, {'profile': 'grooved', 'width': 40, 'pg_contact_w': 30, 'tire_od': 88})
+    g_lands = mod.compute(grooved)['radii'][3]
+    old_groove = {'profile': 'Grooved', '_script_version': '1.12', 'tire_od': 91.5946, 'width': 40,
+                  'pg_ball_d': 127, 'pg_contact_w': 30}
     checks = [
-        (mod.migrate({'pattern': 'Gothic arch', 'keep_outer': False}).get('keep_open'), True),
-        (mod.migrate({'pattern': 'Honeycomb', 'keep_outer': True}).get('keep_open'), True),
-        (mod.migrate({'a_peg_w': 5.0}).get('a_peg_dia'), 5.0),
+        # settings migration from earlier versions
+        ('migrate keep_outer (Gothic)', mod.migrate({'pattern': 'Gothic arch', 'keep_outer': False}).get('keep_open'),
+         True),
+        ('migrate keep_outer (Honeycomb)', mod.migrate({'pattern': 'Honeycomb', 'keep_outer': True}).get('keep_open'),
+         True),
+        ('migrate square pegs', mod.migrate({'a_peg_w': 5.0}).get('a_peg_dia'), 5.0),
+        ('pre-profile settings load flat', dict(mod.DEFAULTS, **mod.migrate({'pattern': 'Honeycomb'}))['profile'],
+         'Flat'),
+        # profile geometry (values worked out by hand)
+        ('crown edge drop', round(crown.edge, 2), 2.95),
+        ('crown face angle', round(crown.max_angle, 1), 37.8),
+        ('groove depth', round(groove.depth, 2), 1.80),
+        ('groove edge angle', round(groove.max_angle, 1), 13.7),
+        ('groove edge sits on the OD', round(groove.drop_z(5.0), 9), 0.0),
+        ('loft sections hit the knots', all(any(abs(z - k) < 1e-9 for z in crown.sections(0, 30))
+                                            for k in (0, 6, 24, 30)), True),
+        ('crowned record skips groove keys', 'pg_ball_d' in mod.relevant_keys(crowned), False),
+        ('crowned record keeps crown keys', 'pc_crown_w' in mod.relevant_keys(crowned), True),
+        # a grooved tire's OD is the groove bottom; it is built from the lands
+        ('grooved: groove bottom = tire OD', round(2 * (g_lands - groove.depth), 6), 88.0),
+        ('grooved: name keeps the OD as given', 'OD88 ' in mod.compute(grooved)['label'], True),
+        ('migrate 1.12 grooved OD (lands)', round(mod.migrate(old_groove)['tire_od'], 2), 88.0),
+        ('crowned OD unchanged (the crown)', mod.compute(crowned)['radii'][3], 48.0),
     ]
-    for i, (got, want) in enumerate(checks):
+    for label, got, want in checks:
         good = got == want
         failed += 0 if good else 1
-        print('%s  migration check %d: got %r want %r' % ('PASS' if good else 'FAIL', i + 1, got, want))
+        print('%s  %-40s got %r want %r' % ('PASS' if good else 'FAIL', label, got, want))
     print('\n%d failure(s)' % failed)
     return 1 if failed else 0
 

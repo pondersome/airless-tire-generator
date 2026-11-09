@@ -28,6 +28,13 @@ TPU and foaming PEBA, but nothing in it is robot-specific.
   slicer lines, so it prints as clean wall loops with no gap fill.
 - **Optional tread rim**: with 0 lines the structure itself becomes the contact
   surface, with a choice of open or closed tread.
+- **Tread profiles across the width**: *Crowned* rolls the edges off with a
+  crown arc and tighter shoulder arcs; *Grooved* cups a ball with a circular
+  groove of the ball's radius over a chosen contact width (for flywheels). A
+  grooved tire's OD is the bottom of the groove, its working surface, so
+  surface speed stays put while you vary the groove. The structure is
+  squeezed in proportion from the tread down to the inner rim, so members keep
+  their line counts and the bore stays straight for a press fit.
 - **Hub anchors**: round pegs (circle on a stem, running the full width),
   T-slots and dovetails projecting into the bore, each with its own count, size
   and phase.
@@ -70,8 +77,15 @@ remove the old entry from the list and add the folder again.
    - Slicer line width (e.g. 0.62 mm for a 0.6 mm nozzle).
    - Inner rim and tread rim thickness, in lines. Tread rim 0 = no outer rim.
    - Junction fillet (0 = off).
-4. Optionally add **Anchors** and keep **Make hub cutter body** ticked.
-5. Watch the **Resulting** box for thicknesses, warnings and problems, then OK.
+4. Optionally pick a **Tread profile**:
+   - *Crowned*: crown width, crown radius (0 = flat crown) and shoulder radius.
+     The shoulders run on smoothly from the crown to the faces.
+   - *Grooved*: ball diameter and contact width (the groove's width across the
+     tire). **Tire OD is then the groove bottom**; the lands either side come
+     out larger by twice the groove depth, shown under Resulting.
+5. Optionally add **Anchors** and keep **Make hub cutter body** ticked.
+6. Watch the **Resulting** box for thicknesses, profile drops, warnings and
+   problems, then OK.
 
 A new component named after the settings is created, for example
 `Tire Gothic N12x2 OD96`, containing a `Tire` body and, with anchors, a hidden
@@ -115,16 +129,34 @@ Description**.
   open leaves separate leg tips, closed joins each arch on the OD. Honeycomb:
   open gives radial lugs, closed gives a zigzag tread. Curved spokes are always
   open.
+- **Tread profiles**: every height of the tire is a squeezed copy of the flat
+  design, so the checks run again where the structure is squeezed most (the
+  faces of a crowned tire, the bottom of a groove), and gaps between members
+  are followed all the way down, since squeezing can open gaps as well as
+  close them. Thin walls lean with the profile and have nothing beside them to
+  lean on, so slopes past 45 degrees from vertical are flagged on both sides.
+  Profiled tires take longer to build: curved parts of the width are lofted
+  through a series of sections.
 
 ## Offline tools
 
-[`tools/`](tools) has a smoke test of the validation rules and a PNG preview
-renderer. Both run with plain Python 3, no Fusion needed:
+[`tools/`](tools) has a smoke test of the validation rules, a PNG preview
+renderer, a dry run of the Fusion build against a fake of the API, and a
+report on what makes an exported STEP file big. All run with plain Python 3,
+no Fusion needed:
 
 ```
 python tools/smoke_test.py
+python tools/dry_build.py
 python tools/preview.py pattern=honey outer_lines=0 --tread
+python tools/preview.py profile=grooved width=40 pg_contact_w=30 --side
+python tools/step_report.py "my tire.step"
 ```
+
+For slicing, export the tire body as a mesh (right-click the body, **Save As
+Mesh**, 3MF). Bambu Studio imports a mesh quickly; from STEP it has to
+convert every exact curve itself, which is slow for a dense profiled
+honeycomb.
 
 ## Roadmap
 

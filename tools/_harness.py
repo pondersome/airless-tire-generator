@@ -13,6 +13,13 @@ PATTERN_ALIASES = {
     'honey': 'Honeycomb',
     'honeycomb': 'Honeycomb',
 }
+PROFILE_ALIASES = {
+    'flat': 'Flat',
+    'crown': 'Crowned',
+    'crowned': 'Crowned',
+    'groove': 'Grooved',
+    'grooved': 'Grooved',
+}
 
 
 def load_addin():
@@ -50,6 +57,8 @@ def coerce(mod, key, value, default):
         return value
     if key == 'pattern':
         return PATTERN_ALIASES.get(value.lower(), value)
+    if key == 'profile':
+        return PROFILE_ALIASES.get(value.lower(), value)
     if isinstance(default, bool):
         return value.lower() in ('1', 'true', 'yes', 'on')
     if isinstance(default, int):

@@ -5,12 +5,18 @@ found and what we decided, so a new session can pick up without losing
 context. It is more detailed than a hand-off on purpose: the reasoning behind
 decisions and the dead ends matter as much as the final code.
 
-- **Sessions covered:** one long Claude Code session, 2026-11-03 to 2026-11-06
-  (session id `f3ea792b-2d54-417d-8b42-b8867b25a674`; the raw transcript is
-  `C:\Users\IronReign\.claude\projects\C--Users-IronReign\f3ea792b-2d54-417d-8b42-b8867b25a674.jsonl`).
-- **State at the end:** Fusion add-in v1.11 in this repo, working in Fusion,
-  **nothing committed yet** (the user approves commits). One open issue:
-  slicing very fine honeycombs (see [Open issues](#open-issues)).
+- **Sessions covered:**
+  1. 2026-11-03 to 2026-11-06: materials, design exploration and the generator
+     up to v1.11 (session id `f3ea792b-2d54-417d-8b42-b8867b25a674`; the raw
+     transcript is
+     `C:\Users\IronReign\.claude\projects\C--Users-IronReign\f3ea792b-2d54-417d-8b42-b8867b25a674.jsonl`).
+  2. 2026-11-06 to 2026-11-09, in this repo: tread profiles, v1.12 to v1.14
+     (session id `e6490a10-da98-4e30-8834-a386621eae74`; the raw transcript is
+     `C:\Users\IronReign\.claude\projects\D--Documents-GitHub-airless-tire-generator\e6490a10-da98-4e30-8834-a386621eae74.jsonl`).
+- **State at the end:** Fusion add-in v1.14, committed (the user approves
+  commits). A grooved honeycomb flinger built in Fusion, exported, and is test
+  printing; crowned profiles have not been built in Fusion yet. See
+  [Open issues](#5-open-issues).
 
 ---
 
@@ -144,10 +150,10 @@ tower grows, the printer changes, or Arrange runs.
 
 ## 4. The generator: architecture and decisions
 
-### Current form (v1.11)
+### Current form (v1.14)
 
 - **Location:** `fusion/AirlessTireGenerator/AirlessTireGenerator.py` (single
-  file, ~1400 lines), `.manifest`, `resources/16x16.svg`, `32x32.svg`.
+  file, ~2250 lines), `.manifest`, `resources/16x16.svg`, `32x32.svg`.
   `last_settings.json` (per-user dialog memory) is git-ignored.
 - **Add-in**, runs on startup, button in **SOLID > CREATE** next to Spur Gear.
   Installed by linking the repo folder in **Utilities > Add-Ins > + > Script or
@@ -156,9 +162,16 @@ tower grows, the printer changes, or Arrange runs.
   `PonderboticsAirlessTire` (legacy groups `IronReignStructuredTire`,
   `IronReignWheelGenerator` still read). Manifest id
   `5ab69ea8-d574-432b-8a39-e49cf2b644a5` (keep it fixed from now on).
-- **Offline tools** in `tools/`: `smoke_test.py` (30 checks, all pass),
-  `preview.py` (PNG renderer), `fusionstub/` (minimal `adsk` stand-in),
-  `_harness.py`.
+- **Offline tools** in `tools/` (plain Python 3, no Fusion):
+  - `smoke_test.py`: 58 checks of validation rules, profile maths and
+    migrations, all pass.
+  - `preview.py`: PNG renderer; `--z` draws a squeezed slice of a profiled
+    tire, `--side` the half-section across the width.
+  - `dry_build.py`: runs `build()` against the recording fake API and checks
+    the sketches it would make; run it with the smoke test after build changes.
+  - `step_report.py`: shows what makes an exported STEP file big.
+  - `fusionstub/`: `adsk` stand-in, now a recording fake of the API calls
+    `build()` makes. `_harness.py`: shared loading and settings parsing.
 
 ### Geometry model
 
@@ -206,6 +219,33 @@ Top view on XY, extruded +Z by width:
   connected body. Combine > Cut on the hub carves the slots and sizes the hub
   OD to bore - 2 x clearance. Hidden by default.
 
+**Tread profiles** (v1.12 to v1.14) shape the tire across its width; Flat is
+the default, so older settings load unchanged:
+
+- **Crowned**: crown width, crown radius (0 = flat crown), shoulder radius.
+  The shoulders run on tangentially from the crown edges to the faces. Tire
+  OD is the crown, the largest diameter.
+- **Grooved**: ball diameter and contact width give a centred circular groove
+  of the ball's radius, with flat lands either side. **Tire OD is the groove
+  bottom**, the working surface, held constant in A/B tests for constant
+  surface speed; the lands come out at OD + 2 x depth (`build_params`).
+- **The squeeze**: the pattern is laid out at the largest diameter (the crown,
+  or the lands) and only ever compressed. At each height the bore and inner
+  rim stay put, the spoke zone scales in proportion (`radial_map`), the tread
+  rim moves with the surface keeping its line count, and member centrelines
+  are mapped then re-thickened, so every wall stays whole slicer lines.
+- **Build**: flat zones of the width are extruded; curved zones are lofted
+  per seed member through sections (at most 8 mm and 20 degrees of surface
+  turn apart, with a section at every arc junction); each member's pieces are
+  fused before the circular pattern. The tread rim is a revolve of the exact
+  profile; an open tread is trimmed by a revolve cut. Bands are drawn as
+  simply as the geometry allows (`band_shape`): exact lines and arcs where
+  unsqueezed, straight lines where the squeeze bends a straight wall less
+  than 0.01 mm, otherwise splines through 9 points.
+- The Resulting box shows the drops, the edge or lands OD, the steepest
+  angle and the spoke zone depth at both ends; the completion message
+  reports build time per phase.
+
 **Validation** (live, in the dialog): errors disable OK; warnings don't.
 
 - Errors: spoke >= rim thickness, odd count with alternate, honeycomb walls that
@@ -216,6 +256,18 @@ Top view on XY, extruded +Z by width:
 - Warnings/notes: members that **touch/overlap** (note: they merge), gaps
   **narrower than one line** (warning: unprintable sliver, fillets may fail),
   short or tiny cells, anchors overlapping or crowding at tips.
+- Profile errors: crown radius not more than half the crown width; shoulders
+  that would turn past vertical before the faces (the message gives the
+  minimum radius); crown or groove wider than the tire; groove as wide as the
+  ball; under 2 mm of spoke zone where the squeeze is deepest (for a groove,
+  that is the zone at the given OD).
+- Profile checks: cell checks re-run where the squeeze is deepest; gaps
+  between neighbours are **followed through the whole squeeze**, because
+  squeezing flattens bowed members and can open gaps as well as close them,
+  and a sub-line gap at any height is reported with its heights
+  (`at z = a and b mm`); slopes past 45 degrees from vertical warn on either
+  shoulder. Warnings on profiled tires say where they apply (at the crown,
+  the lands, the faces or the groove bottom).
 
 **Records and regen:**
 
@@ -225,7 +277,10 @@ Top view on XY, extruded +Z by width:
   its settings; **Replace selected tire** rebuilds in the same parent and
   transform, deletes the old occurrence after success, single undo step.
 - `migrate()` translates older settings (keep_outer -> keep_open with the
-  Gothic inversion; square pegs -> round; missing stem width).
+  Gothic inversion; square pegs -> round; missing stem width; a grooved OD
+  stored by pre-release v1.12 at the lands -> the groove bottom).
+- Names carry the profile: `Tire Honey N64 R2 A30 OD88 grooved D72 C30 norim
+  open` (ball 72 mm, contact 30 mm), always with the OD as entered.
 - Each tire's timeline items are collapsed into one **named timeline group**.
 
 ### Key decisions and why
@@ -246,6 +301,17 @@ Top view on XY, extruded +Z by width:
 | Ponderbotics branding, pondersome account | Team credit to be added once they test and give feedback |
 | `fusion/` subfolder | Room for future `onshape/` and standalone versions |
 | No commits without approval; no AI attribution | Standing user rules |
+| Profiles squeeze the 2D design radially; bore and inner rim fixed | Tire presses onto the hub (side plates keep alignment); spreads the deformation through the structure instead of only trimming the tread |
+| Re-thicken members after mapping | Walls stay whole slicer lines at every height |
+| Lay out at the largest diameter, only compress | One direction of deformation; the unsqueezed slice is the design as entered |
+| Grooved OD = groove bottom | It is the working surface; A/B tests hold surface speed while varying the groove |
+| Radii and widths as inputs, drops shown as results | Usual tire-profile terms; the ball is a radius anyway |
+| Extrude flat zones, loft curved ones, split at corners | Exact geometry where flat; one loft would round off the groove-edge corner |
+| Fuse each member's pieces before patterning | Splitting at the lands had tripled the bodies in the pattern and join |
+| Lines and arcs wherever the geometry allows | Spline edges made a 47 MB STEP (16 min Bambu import); now 12.5 MB |
+| Follow gaps through the whole squeeze | Squeezing flattens bowed members and can open gaps, not just close them |
+| Steepness warning on both shoulders | Thin walls with open space either side overhang whichever way they lean |
+| 3MF for slicing | Bambu Studio converts STEP geometry itself (slow); meshes import quickly |
 
 ### Fusion API lessons (hard-won)
 
@@ -271,6 +337,17 @@ Top view on XY, extruded +Z by width:
   result (TypeError on tread trim).
 - Stop/Run reloads add-in code; the confirmation message shows the version that
   ran.
+- **Sketch fitted splines are expensive downstream.** Edges built from them
+  export to STEP as rational degree-5 B-splines of about 80 control points;
+  4,096 such edges were 85% of a 47 MB file. Use lines and arcs wherever the
+  geometry allows.
+- **Bambu Studio converts STEP geometry itself.** That 47 MB file took about
+  16 minutes to import, looking stalled at 20% with little CPU in use. A 3MF
+  from right-click > **Save As Mesh** imports quickly (and Bambu Studio's own
+  projects are 3MF).
+- Worked first time for profiled tires: lofts through sketches on offset
+  construction planes, revolves from XZ-plane sketches (drawn through
+  `modelToSketchSpace`), and joining bodies that touch on identical faces.
 
 ---
 
@@ -294,28 +371,58 @@ Top view on XY, extruded +Z by width:
 2. **PEBA-Air speed-vs-foaming** coupon tests not yet run.
 3. **Single-line-wall printability** generally (feeds into issue 1).
 4. Untested in Fusion so far: fillets on dense structures, anchors + fillets on
-   all patterns.
+   all patterns, **fillets on profiled tires** (junctions along lofted members
+   need the new edge selection), and **crowned profiles** (only grooved has
+   been built).
+5. **Grooved flinger test print** in progress: `Tire Honey N64 R2 A30 OD88
+   grooved D72 C30 norim open`. Whether that design is right depends on the
+   parameters and the material, not the generator; results to come.
+6. **Profiled build speed.** Not measured in detail yet (the completion message
+   now reports per-phase times); the flat 128-cell honeycomb took about 4
+   minutes. Most of the cost is expected in joining lofted (freeform) members.
+   Untried ideas: fuse each repeating unit into one body before patterning (128
+   bodies in the join instead of 1,664), or pattern features with Fusion's
+   identical-compute option.
+7. A profiled honeycomb's STEP is still 12.5 MB, mostly 1,280 seam curves where
+   lofted members meet (computed by Fusion's kernel). 3MF is the route for
+   slicing.
+8. **A/B nuance:** the pattern is laid out at the lands, so with the groove
+   bottom held constant the cells there shift slightly as the groove changes
+   (the spoke zone depth there stays constant). Laying the pattern out at the
+   groove bottom instead would make them identical; not needed so far.
 
 ## 6. Next steps (as discussed)
 
+- Test print results for the grooved flinger; A/B groove depth and width at a
+  constant groove-bottom OD.
+- Build a crowned tire in Fusion; try fillets on a profiled tire.
 - Resolve the honeycomb slicing issue (tests above), possibly add wall margin.
-- Commit the initial import once approved (proposed message is in the session
-  log, step 44), then push.
+- Later profile options: parabolic or conformity-based easing of the groove
+  (groove radius slightly larger than the ball starts contact in the middle;
+  smaller touches both edges first and self-centres), a groove plus rounded
+  shoulders, an off-centre groove, asymmetric profiles.
+- Push the tread-profiles commit (the initial import is already on origin).
 - README screenshots (`docs/images`).
 - Possible: dev auto-reload (core module reloaded per run), split a Fusion-free
-  core module for Onshape/standalone reuse, App Store later.
+  core module for Onshape/standalone reuse (the profile maths is already pure
+  Python), App Store later.
 - Team credit in README once testing starts.
 
 ## 7. Where things are
 
 - Repo: `D:\Documents\GitHub\airless-tire-generator` (origin
-  `https://github.com/pondersome/airless-tire-generator.git`, branch `main`, no
-  commits).
+  `https://github.com/pondersome/airless-tire-generator.git`, branch `main`;
+  commits: the initial import, pushed, then the tread profiles, not yet pushed).
 - Fusion links the repo folder directly; no copy in `%APPDATA%\...\API\AddIns`.
 - Bambu user filaments: `C:\Users\IronReign\AppData\Roaming\BambuStudio\user\3894606953\filament\`.
-- Session scratchpad (temporary, may be cleared): backups of every add-in
-  version (`StructuredTireGenerator.v08.bak` ... `v16.bak`), the old script and
-  add-in folders, PEBA profile backups, render images.
+- Exports used to diagnose STEP size, in `Downloads`: `Tire Honey N64 R2 A30
+  OD88 grooved D72 C30 norim open.step` (v1.13, 47.1 MB) and `... (1).step`
+  (v1.14, 12.5 MB), plus the 3MF that was sliced.
+- Session scratchpads are temporary and may be cleared. Session 1's held
+  backups of every add-in version (`StructuredTireGenerator.v08.bak` ...
+  `v16.bak`), the old script and add-in folders, PEBA profile backups and
+  render images. Everything worth keeping from session 2 (the fake API, the
+  dry run, the STEP report) moved into `tools/`.
 
 ---
 
@@ -649,3 +756,107 @@ the response. Version numbers refer to the generator.
 
 52. **User:** Come back to that later; generate this journey document.
     **Response:** This file.
+
+### Part F: tread profiles (session 2, v1.12 to v1.14)
+
+53. **User:** Migrated the conversation to this repo; read the specs folder to
+    learn the project.
+    **Response:** Read this file and the README and summarised. Noted the doc
+    said nothing was committed, though `main` already had the initial import;
+    saved the standing rules (approve commits, no AI attribution) to memory.
+
+54. **User:** So far everything is 2D with strong radial symmetry plus a
+    straight extrude. Can we extrude symmetrically along a path to develop a
+    bulge, outward (soften the edges for turning on terrain without catching)
+    or inward (ball-flinging flywheels that keep more surface contact)? This
+    should be a plastic deformation of the whole pattern spread along the
+    radius, not just stretching the outermost bits. Fusion operations, or
+    rethink the generators?
+    **Response:** Fusion's own operations don't fit: sweep with a guide rail
+    scales the bore and the wall thicknesses, non-uniform scale is global, and
+    a revolve cut only trims. Proposed mapping the member centrelines radially
+    at each height (bore fixed, spoke zone scaled), re-thickening so walls stay
+    whole lines, and lofting seed members through sections before patterning.
+
+55. **User:** The bore stays straight: the tire is pressed onto the hub, with
+    side plates for alignment under vibration. Inner and outer bulges will
+    differ. Inward: start with a circular groove matching the ball for a
+    target contact cross-section (parabolic might ease contact later). Don't
+    assume a bulge spans the full width. Outward: consider the shoulder; tires
+    have a more aggressive downturn from crown to shoulder (screenshot labelling
+    crown, shoulder, sidewall), so a compound profile, still without solid
+    sidewalls.
+    **Response:** Prototyped the profile maths and the mapping in the
+    scratchpad, with side half-section and slice renders. Proposed Flat /
+    Crowned (crown width, crown radius, shoulder radius) / Grooved (ball
+    diameter, contact width), the OD as the largest diameter with the pattern
+    only compressed, and re-checking where the squeeze is deepest. Corrected an
+    earlier claim: thin walls overhang whichever way they lean, so both
+    shoulders are limited, not just one. Floated parabolic or conformity-based
+    groove easing, a groove plus rounded shoulders, an off-centre groove.
+
+56. **User:** Proceed.
+    **Response:** Built v1.12: profile classes, radial map, squeezed checks,
+    dialog group, `preview.py --z/--side`, smoke tests, and a recording fake of
+    the Fusion API to dry-run `build()` (which also made section sketch names
+    unique). Found that squeezing can open gaps as well as close them (Gothic
+    legs flatten), so the gap checks now follow the whole squeeze and report
+    the heights where a sliver appears.
+
+57. **User:** The 128-cell honeycomb already takes about 4 minutes to build. How
+    much worse will it be now?
+    **Response:** Counted the operations with the fake: a groove with lands
+    split every member into three bodies (4,992 in the join instead of 1,664).
+    Fused each member's pieces before patterning and added per-phase build
+    timing. Estimated 1.5 to 2.5 times the flat build, unmeasured: freeform
+    surfaces join more slowly than planes and cylinders.
+
+58. **User:** Do I have to restart Fusion to see the update?
+    **Response:** No: Shift+S, Stop, Run; the dialog and message show the
+    version.
+
+59. **User:** OD as the maximum suits flat and crowned, but a groove's working
+    surface is its bottom; A/B tests will hold the groove bottom constant for
+    constant surface speed while varying engagement depth and width. An
+    arithmetic build OD is enough; the build needn't change.
+    **Response:** v1.13: Tire OD is the groove bottom and the lands are OD +
+    2 x depth (`build_params`); names keep the OD as entered and add the
+    contact width; the spoke-zone check applies at the groove bottom; warnings
+    say where they apply; tires built with 1.12 migrate. Noted that the cells
+    at the groove bottom shift slightly with groove depth, since the pattern is
+    laid out at the lands.
+
+60. **User:** Build time was acceptable, but the STEP export took a while and
+    was 47 MB, and Bambu Studio sat at 20% importing with little CPU or memory
+    use (a hex groove at half the previous resolution). Then: it finished after
+    about 16 minutes.
+    **Response:** Analysed the STEP: 85% of its points were in 5,376 B-spline
+    edge curves, 4,096 of them lying across the tire at the faces and the
+    land/groove boundaries, from members drawn as 21 to 31-point fitted
+    splines. v1.14 draws exact lines and arcs where unsqueezed, keeps squeezed
+    straight walls straight (bend under 0.01 mm), uses 9-point splines only for
+    curved members, and needs fewer loft sections. Suggested 3MF for slicing.
+
+61. **User:** I don't think Bambu understands 3MF?
+    **Response:** It does: Bambu Studio's own projects are 3MF (the user's were
+    written by Bambu Studio 2.09). Export with right-click > Save As Mesh > 3MF
+    and add it with File > Import.
+
+62. **User:** The STEP shrank (measured: 12.5 MB) and the 3MF imported
+    quickly; results after the test print.
+    **Response:** Listed what to watch: groove smoothness, cells at the groove
+    bottom, the groove sides.
+
+63. **User:** It seems to be printing; whether that design is right depends on
+    the chosen parameters and material. Call it a major feature set with some
+    optimisation for very complex results; propose the commit language.
+    **Response:** Proposed the commit message.
+
+64. **User:** Did we move the scratchpad work into tools?
+    **Response:** No; moved it: the fake API replaced `tools/fusionstub`, plus
+    `tools/dry_build.py` and `tools/step_report.py`, with README sections.
+    `step_report.py` confirmed the fix on the two exports (the 4,096 curves
+    lying across the tire became lines).
+
+65. **User:** Update the journey doc, then commit.
+    **Response:** This part, and the commit.

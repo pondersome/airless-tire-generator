@@ -2,19 +2,30 @@
 
 Usage:
     python tools/preview.py [key=value ...] [--out tire.png] [--size 800]
-                            [--tread] [--cutter]
+                            [--tread] [--cutter] [--z Z | --side]
 
 Examples:
     python tools/preview.py pattern=gothic g_count=12 g_interleave=true
     python tools/preview.py pattern=honey h_angle=-20 outer_lines=0 --tread
     python tools/preview.py a_peg_n=6 a_dt_n=6 a_dt_phase=30 --cutter
+    python tools/preview.py profile=grooved width=40 pg_contact_w=30 --side
+    python tools/preview.py profile=crowned --tread --z deep
 
 Settings are the add-in's DEFAULTS keys (see AirlessTireGenerator.py);
-pattern accepts gothic / curved / honey. The preview draws spoke centrelines
-at their real thickness, so it shows layout and clearances, not fillets.
-Shading: rims dark grey, structure black, the first copy of a repeated
-element darker, cutter outline light grey (--cutter), OD trim line when there
-is no tread rim.
+pattern accepts gothic / curved / honey, profile flat / crowned / grooved.
+The preview draws spoke centrelines at their real thickness, so it shows
+layout and clearances, not fillets. Shading: rims dark grey, structure black,
+the first copy of a repeated element darker, cutter outline light grey
+(--cutter), OD trim line when there is no tread rim.
+
+With a tread profile, the top view shows one slice across the width: --z is
+its height in mm from the bottom face ('deep' = where the structure is
+squeezed most); without --z it shows the pattern as designed, at the tire's
+largest diameter (a grooved tire's lands), which is drawn as a faint circle
+on squeezed slices. --side draws the half-section across
+the width instead (axis below): rims dark grey, the profile on top, and thin
+lines showing where evenly spaced radii of the design end up, so you can see
+the squeeze fade from the tread down to the inner rim.
 """
 import argparse
 import math
@@ -42,28 +53,31 @@ def write_png(path, img, w, h):
 
 
 class Canvas:
-    """Greyscale canvas mapping model mm to pixels, with optional clip radius."""
+    """Greyscale canvas mapping model mm to pixels, with optional clip radius.
+    size is the width in pixels (and the height unless given); span is the
+    model width it shows, centred on (cx, cy)."""
 
-    def __init__(self, size, cx, cy, span):
-        self.n = size
-        self.img = bytearray(b'\xff' * size * size)
+    def __init__(self, size, cx, cy, span, height=None):
+        self.w = size
+        self.h = height or size
+        self.img = bytearray(b'\xff' * self.w * self.h)
         self.sc = size / span
         self.cx, self.cy = cx, cy
         self.clip = None
 
     def px(self, x, y):
-        return (self.n / 2 + (x - self.cx) * self.sc, self.n / 2 - (y - self.cy) * self.sc)
+        return (self.w / 2 + (x - self.cx) * self.sc, self.h / 2 - (y - self.cy) * self.sc)
 
     def model(self, i, j):
-        return ((i - self.n / 2) / self.sc + self.cx, (self.n / 2 - j) / self.sc + self.cy)
+        return ((i - self.w / 2) / self.sc + self.cx, (self.h / 2 - j) / self.sc + self.cy)
 
     def put(self, i, j, v):
-        if 0 <= i < self.n and 0 <= j < self.n:
+        if 0 <= i < self.w and 0 <= j < self.h:
             if self.clip is not None:
                 x, y = self.model(i, j)
                 if math.hypot(x, y) > self.clip:
                     return
-            self.img[j * self.n + i] = v
+            self.img[j * self.w + i] = v
 
     def disc(self, x, y, r, v):
         ci, cj = self.px(x, y)
@@ -81,11 +95,21 @@ class Canvas:
                 self.disc(ax + (bx - ax) * u / n, ay + (by - ay) * u / n, width / 2.0, v)
 
     def ring(self, r_in, r_out, v):
-        for j in range(self.n):
-            for i in range(self.n):
+        for j in range(self.h):
+            for i in range(self.w):
                 x, y = self.model(i, j)
                 if r_in <= math.hypot(x, y) <= r_out:
                     self.put(i, j, v)
+
+    def fill_between(self, x0, x1, lo, hi, v):
+        """Fill between y = lo(x) and y = hi(x) for x0 <= x <= x1."""
+        for i in range(max(0, int(self.px(x0, 0)[0])), min(self.w, int(self.px(x1, 0)[0]) + 1)):
+            x = self.model(i + 0.5, 0)[0]
+            if not x0 <= x <= x1:
+                continue
+            j_top, j_bot = self.px(x, hi(x))[1], self.px(x, lo(x))[1]
+            for j in range(max(0, int(j_top)), min(self.h, int(j_bot) + 1)):
+                self.put(i, j, v)
 
     def circle_line(self, r, v):
         steps = max(360, int(2 * math.pi * r * self.sc))
@@ -96,7 +120,7 @@ class Canvas:
 
     def polygon(self, pts, v):
         js = [self.px(x, y)[1] for x, y in pts]
-        for j in range(max(0, int(min(js))), min(self.n, int(max(js)) + 2)):
+        for j in range(max(0, int(min(js))), min(self.h, int(max(js)) + 2)):
             y = self.model(0, j)[1]
             xs = []
             for k in range(len(pts)):
@@ -113,11 +137,19 @@ class Canvas:
         self.disc(x, y, r, v)
 
 
-def render(mod, p, size=800, tread=False, cutter=False):
+def render(mod, p, size=800, tread=False, cutter=False, z=None):
+    """Top view. With a tread profile and a height z, the slice at z: the
+    structure squeezed for the surface there, rims and members at full
+    thickness."""
     g = mod.compute(p)
     r0, r1, r2, r3 = g['radii']
     t = g['t']
-    open_tread = p['outer_lines'] <= 0
+    to = p['outer_lines'] * p['line_w']
+    open_tread = to <= 0
+    shape = g.get('profile')
+    d = shape.drop_z(z) if (shape is not None and z is not None) else 0.0
+    f, _ = mod.radial_map(g['radii'], to, d)
+    R = r3 - d            # tread surface at this height
     if tread:
         span = (r3 - r1) * 1.6 + 4
         cv = Canvas(size, 0, (r1 + r3) / 2.0, span)
@@ -127,15 +159,17 @@ def render(mod, p, size=800, tread=False, cutter=False):
     # rims
     cv.ring(r0, r1, 90)
     if not open_tread:
-        cv.ring(r2, r3, 90)
+        cv.ring(R - to, R, 90)
 
-    # structure, clipped at the OD when there is no tread rim
-    cv.clip = r3 if open_tread else None
+    # structure, clipped at the tread surface when there is no tread rim
+    cv.clip = R if open_tread else None
     for leg in g['legs']:
-        cv.polyline(leg['samples'], t, 0 if leg.get('seed') else 40)
+        cv.polyline([mod.map_point(f, q) for q in leg['samples']], t, 0 if leg.get('seed') else 40)
     cv.clip = None
     if open_tread:
-        cv.circle_line(r3, 170)
+        cv.circle_line(R, 170)
+    if d > 0:
+        cv.circle_line(r3, 215)   # the largest diameter, for reference
 
     anchors = g.get('anchors', [])
 
@@ -167,6 +201,45 @@ def render(mod, p, size=800, tread=False, cutter=False):
     return cv, g
 
 
+def render_side(mod, p, size=800):
+    """Half-section across the width (z to the right, radius up): how the
+    profile squeezes the structure at every height."""
+    g = mod.compute(p)
+    r0, r1, r2, r3 = g['radii']
+    W = p['width']
+    to = p['outer_lines'] * p['line_w']
+    shape = g.get('profile')
+
+    def drop(z):
+        return shape.drop_z(z) if shape is not None else 0.0
+
+    def R(z):
+        return r3 - drop(z)
+
+    span = W + 4.0
+    height = int(size * (r3 - r0 + 4.0) / span)
+    cv = Canvas(size, W / 2.0, (r0 + r3) / 2.0 + 0.5, span, height)
+    zs = [W * i / 400.0 for i in range(401)]
+
+    if isinstance(shape, mod.GrooveProfile):      # the ball, seated in the groove
+        bc = r3 - shape.depth + shape.Rg
+        arc = [math.radians(-50 + 0.25 * i) for i in range(401)]
+        cv.polyline([(W / 2.0 + shape.Rg * math.sin(a), bc - shape.Rg * math.cos(a)) for a in arc], 0.06, 190)
+    cv.polyline([(-1.5, r3), (W + 1.5, r3)], 0.05, 200)          # largest diameter
+    cv.fill_between(0, W, lambda z: r0, lambda z: r1, 90)          # inner rim (never moves)
+    if to > 0:
+        cv.fill_between(0, W, lambda z: R(z) - to, R, 90)           # tread rim follows the surface
+    else:
+        cv.polyline([(z, R(z)) for z in zs], 0.1, 0)
+    top = r2 if to > 0 else r3
+    for i in range(1, 8):                                          # evenly spaced design radii, squeezed
+        rb = r1 + (top - r1) * i / 8.0
+        cv.polyline([(z, mod.radial_map(g['radii'], to, drop(z))[0](rb)) for z in zs], 0.06, 0)
+    for z in (0.0, W):                                             # the faces
+        cv.polyline([(z, r1), (z, R(z))], 0.05, 160)
+    return cv, g
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('overrides', nargs='*', help='setting overrides as key=value')
@@ -174,6 +247,9 @@ def main(argv=None):
     ap.add_argument('--size', type=int, default=800)
     ap.add_argument('--tread', action='store_true', help='zoom on a section of the tread at the top')
     ap.add_argument('--cutter', action='store_true', help='also draw the hub cutter outline')
+    ap.add_argument('--z', default=None,
+                    help="with a tread profile: slice height in mm from the bottom face, or 'deep'")
+    ap.add_argument('--side', action='store_true', help='draw the half-section across the width instead')
     a = ap.parse_args(argv)
 
     mod = load_addin()
@@ -185,8 +261,25 @@ def main(argv=None):
     if err:
         print('PROBLEM: ' + err)
         return 1
-    cv, g = render(mod, p, a.size, a.tread, a.cutter)
-    write_png(a.out, cv.img, cv.n, cv.n)
+    if a.side:
+        cv, g = render_side(mod, p, a.size)
+    else:
+        z = None
+        if a.z is not None:
+            shape = mod.tread_profile(p)
+            if shape is None:
+                print('Note: --z has no effect on a flat tire.')
+            else:
+                z = shape.deep_z if a.z == 'deep' else float(a.z)
+                if not 0 <= z <= p['width']:
+                    print('PROBLEM: --z must be between 0 and the width (%g mm).' % p['width'])
+                    return 1
+                f, k = mod.radial_map(mod.ring_radii(mod.build_params(p)), p['outer_lines'] * p['line_w'],
+                                      shape.drop_z(z))
+                print('Slice at z=%.2f mm: surface %.2f mm in from the largest diameter, spoke zone squeezed to %.0f%%'
+                      % (z, shape.drop_z(z), 100 * k))
+        cv, g = render(mod, p, a.size, a.tread, a.cutter, z)
+    write_png(a.out, cv.img, cv.w, cv.h)
     print('Wrote %s (%s)' % (a.out, g['label']))
     return 0
 
